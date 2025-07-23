@@ -63,26 +63,32 @@ wide = compute_deltas(df)
 # ============================
 
 def alt_barras_ci(sub_long: pd.DataFrame) -> alt.Chart:
-    """Barras agrupadas por año + barras de error (IC95%)."""
-    # garantizar orden de años
-    sub_long = sub_long.copy()
-    sub_long["anio"] = sub_long["anio"].astype(int)
-    # barras
-    bars = alt.Chart(sub_long).mark_bar().encode(
-        x=alt.X('anio:O', title='Año'),
-        y=alt.Y('valor:Q', title='%'),
-        color=alt.Color('anio:O', legend=None)
+    """Barras agrupadas simples (anio en color) + IC95% como errorbars.
+    Evita facet para no romper el esquema de Altair en Streamlit.
+    """
+    data = sub_long.copy()
+    data["anio"] = data["anio"].astype(str)
+    # Ordenar categorías por valor 2023 (si existe)
+    try:
+        order = (data[data["anio"]=="2023"].sort_values("valor", ascending=False)["categoria"].tolist())
+    except Exception:
+        order = data["categoria"].unique().tolist()
+
+    bars = alt.Chart(data).mark_bar().encode(
+        y=alt.Y('categoria:N', title='Categoría', sort=order),
+        x=alt.X('valor:Q', title='%'),
+        color=alt.Color('anio:N', title='Año')
     )
-    # error bars
-    error = alt.Chart(sub_long).mark_rule().encode(
-        x='anio:O',
-        y='inferior:Q',
-        y2='superior:Q'
+
+    errs = alt.Chart(data).mark_errorbar().encode(
+        y=alt.Y('categoria:N', sort=order),
+        x=alt.X('inferior:Q'),
+        x2='superior:Q',
+        color=alt.Color('anio:N', title='Año', legend=None)
     )
-    # facets por categoría si hay muchas
-    if sub_long['categoria'].nunique() > 8:
-        chart = (bars + error).facet(column=alt.Column('categoria:N', title='Categoría', header=alt.Header(labelAngle=-90)))
-        return chart.resolve_scale(y='shared').properties(width=70)
+
+    height = max(220, 28*data['categoria'].nunique())
+    return (bars + errs).properties(width=650, height=height).resolve_scale(y='shared').properties(width=70)
     else:
         # categorías en eje X secundario
         chart = (bars + error).encode(
@@ -210,4 +216,3 @@ if af:
     # Botón CSV
     csv2 = sub_wide.to_csv(index=False).encode("utf-8")
     st.download_button("Descargar CSV (indicador/grupo)", data=csv2, file_name="resumen_indicador_grupo.csv", mime="text/csv")
-
