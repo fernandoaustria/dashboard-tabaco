@@ -1,5 +1,8 @@
-pandas
-numpy
-streamlit
-altair
-io
+streamlit==1.36.0
+pandas>=2.2
+numpy>=1.26
+altair==5.2.0
+vegafusion==1.6.5
+vegafusion-python-embed==1.6.5
+openpyxl
+matplotlib
