@@ -28,6 +28,10 @@ from io import BytesIO
 # ============================
 # 1. DATA LOADING & PREP
 # ============================
+
+# 🔴 PRIMERO: configurar la página
+st.set_page_config(page_title="Indicadores M – GATS 2009/2015/2023", layout="wide")
+
 @st.cache_data
 def load_data(path: str = "Datos_GATS_Completo.xlsx") -> pd.DataFrame:
     df = pd.read_excel(path)
