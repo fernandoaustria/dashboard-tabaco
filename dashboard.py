@@ -1,14 +1,5 @@
 """
 Streamlit app (versión sencilla) para visualizar indicadores "M" (GATS 2009, 2015, 2023)
-- Vista principal: barras agrupadas con IC95% (fácil de leer)
-- Mensajes clave automáticos (Δ puntos porcentuales 2009→2023)
-- Toggle opcional para ver gráficos avanzados (dumbbell / slopegraph / heatmap)
-
-Requisitos:
-    pip install streamlit pandas numpy altair vegafusion vegafusion-python-embed openpyxl matplotlib
-
-Ejecuta:
-    streamlit run app.py
 """
 
 # ============================
@@ -19,7 +10,6 @@ import numpy as np
 import streamlit as st
 import altair as alt
 
-# Configurar página (única llamada)
 st.set_page_config(page_title="Indicadores M – GATS 2009/2015/2023", layout="wide")
 
 # ============================
@@ -37,13 +27,11 @@ if missing_cols:
     st.error(f"Faltan columnas obligatorias: {missing_cols}")
     st.stop()
 
-# Helper para calcular deltas
 @st.cache_data
 def compute_deltas(df: pd.DataFrame) -> pd.DataFrame:
     wide = df.pivot_table(index=["indicador","grupo","categoria"],
                           columns="anio",
                           values=["valor","inferior","superior"])
-    # Asegurar que existan 2009,2015,2023
     for comp in ["valor","inferior","superior"]:
         for y in [2009,2015,2023]:
             if (comp, y) not in wide.columns:
@@ -64,7 +52,7 @@ wide = compute_deltas(df)
 # ============================
 
 def alt_barras_ci(sub_long: pd.DataFrame) -> alt.Chart:
-    """Barras agrupadas simples (año en color) + IC95% como errorbars"""
+    """Barras horizontales (año en color) + IC95%."""
     data = sub_long.copy()
     data["anio"] = data["anio"].astype(str)
     try:
@@ -88,8 +76,29 @@ def alt_barras_ci(sub_long: pd.DataFrame) -> alt.Chart:
     height = max(220, 28 * data['categoria'].nunique())
     return (bars + errs).properties(width=650, height=height).resolve_scale(y='shared')
 
-# --- Avanzados ---
+# ---- NUEVO: Líneas facetadas ----
+def alt_line_facets(df_long: pd.DataFrame, indicador: str) -> alt.Chart:
+    """Líneas por categoría, facet por grupo, IC95% como rule."""
+    data = df_long[df_long["indicador"] == indicador].copy()
+    data["anio"] = data["anio"].astype(str)
 
+    base = alt.Chart(data).encode(
+        x=alt.X("anio:O", title="Año"),
+        y=alt.Y("valor:Q", title="%"),
+        color=alt.Color("categoria:N", title="Categoría"),
+        tooltip=["grupo","categoria","anio","valor","inferior","superior"]
+    )
+
+    line = base.mark_line(point=True, strokeWidth=2)
+    err  = base.mark_rule().encode(y="inferior:Q", y2="superior:Q", color=alt.Color("categoria:N", legend=None))
+
+    chart = (line + err).facet(
+        row=alt.Row("grupo:N", title=None, header=alt.Header(labelAngle=0))
+    ).properties(width=350, height=220, spacing=10)
+
+    return chart
+
+# --- Avanzados (si quieres mantenerlos) ---
 def _prep_long(sub: pd.DataFrame, cols):
     long = sub.melt(id_vars=["categoria"], value_vars=cols,
                     var_name="anio", value_name="valor")
@@ -131,17 +140,22 @@ def alt_heatmap(df_heat: pd.DataFrame) -> alt.Chart:
     return chart
 
 # ============================
-# 3. UI SIMPLIFICADA
+# 3. UI
 # ============================
+
 st.title("Indicadores M del MPOWER – México (GATS 2009, 2015, 2023)")
+
 st.sidebar.header("Filtros")
 indicadores = sorted(df["indicador"].unique())
 indicador_sel = st.sidebar.selectbox("Indicador", indicadores)
+
 sub_df = df[df["indicador"] == indicador_sel]
 grupos = sorted(sub_df["grupo"].unique())
-grupo_sel = st.sidebar.selectbox("Grupo", grupos)
+grupo_sel = st.sidebar.selectbox("Grupo (para barras)", grupos)
+
 sub_long = sub_df[sub_df["grupo"] == grupo_sel].copy()
-# Mensajes clave
+
+# Hallazgos clave
 msg_lines = []
 for cat, g in sub_long.groupby('categoria'):
     try:
@@ -152,6 +166,7 @@ for cat, g in sub_long.groupby('categoria'):
     except:
         continue
 msg_lines = sorted(msg_lines, key=lambda x: abs(x[2]), reverse=True)
+
 st.subheader("Hallazgos clave")
 if msg_lines:
     top_k = min(5, len(msg_lines))
@@ -159,12 +174,21 @@ if msg_lines:
     st.markdown("\n".join(bullets))
 else:
     st.info("No se pudieron calcular cambios (faltan datos 2009/2023 para este grupo)")
-# Gráfico simple
+
+# Visualización sencilla: elegir tipo
 st.subheader("Visualización sencilla")
-st.caption("Barras agrupadas por año con intervalos de confianza")
-st.altair_chart(alt_barras_ci(sub_long), use_container_width=True)
-with st.expander("Ver datos crudos"):
+viz_tipo = st.radio("Tipo de visualización", ["Barras agrupadas", "Líneas facetadas"], horizontal=True)
+
+if viz_tipo == "Barras agrupadas":
+    st.caption("Barras por categoría y año con intervalos de confianza")
+    st.altair_chart(alt_barras_ci(sub_long), use_container_width=True)
+else:
+    st.caption("Líneas por categoría; cada fila es un grupo")
+    st.altair_chart(alt_line_facets(df, indicador_sel), use_container_width=True)
+
+with st.expander("Ver datos crudos (grupo seleccionado)"):
     st.dataframe(sub_long.sort_values(["categoria","anio"]))
+
 # ============================
 # 4. MODO AVANZADO
 # ============================
@@ -180,8 +204,10 @@ if af:
         st.altair_chart(alt_slopegraph(sub_wide), use_container_width=True)
     else:
         st.altair_chart(alt_heatmap(wide[["indicador","categoria","rel_change"]]), use_container_width=True)
+
     st.markdown("**Resumen de cambios (2009→2023)**")
     cols_show = ["categoria","valor_2009","valor_2023","abs_change","rel_change","cambio_relevante"]
     st.dataframe(sub_wide[cols_show].sort_values("abs_change", ascending=False), use_container_width=True)
     csv2 = sub_wide.to_csv(index=False).encode("utf-8")
-    st.download_button("Descargar CSV (indicador/grupo)", data=csv2, file_name="resumen_indicador_grupo.csv", mime="text/csv")
+    st.download_button("Descargar CSV (indicador/grupo)", data=csv2,
+                       file_name="resumen_indicador_grupo.csv", mime="text/csv")
