@@ -19,6 +19,7 @@ import numpy as np
 import streamlit as st
 import altair as alt
 
+# Configurar página (única llamada)
 st.set_page_config(page_title="Indicadores M – GATS 2009/2015/2023", layout="wide")
 
 # ============================
@@ -36,17 +37,17 @@ if missing_cols:
     st.error(f"Faltan columnas obligatorias: {missing_cols}")
     st.stop()
 
-# Helper para tabla wide y deltas
+# Helper para calcular deltas
 @st.cache_data
 def compute_deltas(df: pd.DataFrame) -> pd.DataFrame:
     wide = df.pivot_table(index=["indicador","grupo","categoria"],
                           columns="anio",
                           values=["valor","inferior","superior"])
-    # asegurar columnas
+    # Asegurar que existan 2009,2015,2023
     for comp in ["valor","inferior","superior"]:
         for y in [2009,2015,2023]:
-            if (comp,y) not in wide.columns:
-                wide[(comp,y)] = np.nan
+            if (comp, y) not in wide.columns:
+                wide[(comp, y)] = np.nan
     wide.columns = [f"{m}_{y}" for m,y in wide.columns]
     wide = wide.reset_index()
     wide["abs_change"] = wide["valor_2023"] - wide["valor_2009"]
@@ -59,19 +60,16 @@ def compute_deltas(df: pd.DataFrame) -> pd.DataFrame:
 wide = compute_deltas(df)
 
 # ============================
-# 2. PLOT FUNCTIONS (simple + avanzado)
+# 2. PLOT FUNCTIONS
 # ============================
 
 def alt_barras_ci(sub_long: pd.DataFrame) -> alt.Chart:
-    """Barras agrupadas simples (anio en color) + IC95% como errorbars.
-    Evita facet para no romper el esquema de Altair en Streamlit.
-    """
+    """Barras agrupadas simples (año en color) + IC95% como errorbars"""
     data = sub_long.copy()
     data["anio"] = data["anio"].astype(str)
-    # Ordenar categorías por valor 2023 (si existe)
     try:
-        order = (data[data["anio"]=="2023"].sort_values("valor", ascending=False)["categoria"].tolist())
-    except Exception:
+        order = data[data["anio"]=="2023"].sort_values("valor", ascending=False)["categoria"].tolist()
+    except:
         order = data["categoria"].unique().tolist()
 
     bars = alt.Chart(data).mark_bar().encode(
@@ -84,17 +82,11 @@ def alt_barras_ci(sub_long: pd.DataFrame) -> alt.Chart:
         y=alt.Y('categoria:N', sort=order),
         x=alt.X('inferior:Q'),
         x2='superior:Q',
-        color=alt.Color('anio:N', title='Año', legend=None)
+        color=alt.Color('anio:N', legend=None)
     )
 
-    height = max(220, 28*data['categoria'].nunique())
-    return (bars + errs).properties(width=650, height=height).resolve_scale(y='shared').properties(width=70)
-    else:
-        # categorías en eje X secundario
-        chart = (bars + error).encode(
-            column=alt.Column('categoria:N', title='Categoría', header=alt.Header(labelAngle=-90))
-        ).resolve_scale(y='shared').properties(width=70)
-        return chart
+    height = max(220, 28 * data['categoria'].nunique())
+    return (bars + errs).properties(width=650, height=height).resolve_scale(y='shared')
 
 # --- Avanzados ---
 
@@ -129,7 +121,6 @@ def alt_slopegraph(sub: pd.DataFrame) -> alt.Chart:
     labels = alt.Chart(end_labels).mark_text(align='left', dx=5).encode(x="anio:O", y="valor:Q", text="categoria")
     return chart + labels
 
-
 def alt_heatmap(df_heat: pd.DataFrame) -> alt.Chart:
     chart = alt.Chart(df_heat).mark_rect().encode(
         x=alt.X("indicador:N", title="Indicador"),
@@ -142,22 +133,15 @@ def alt_heatmap(df_heat: pd.DataFrame) -> alt.Chart:
 # ============================
 # 3. UI SIMPLIFICADA
 # ============================
-
 st.title("Indicadores M del MPOWER – México (GATS 2009, 2015, 2023)")
-
 st.sidebar.header("Filtros")
 indicadores = sorted(df["indicador"].unique())
 indicador_sel = st.sidebar.selectbox("Indicador", indicadores)
-
 sub_df = df[df["indicador"] == indicador_sel]
 grupos = sorted(sub_df["grupo"].unique())
 grupo_sel = st.sidebar.selectbox("Grupo", grupos)
-
-# Datos filtrados
 sub_long = sub_df[sub_df["grupo"] == grupo_sel].copy()
-
-# Mensajes clave (Top cambios por categoría)
-# Δ 2009 -> 2023
+# Mensajes clave
 msg_lines = []
 for cat, g in sub_long.groupby('categoria'):
     try:
@@ -165,11 +149,9 @@ for cat, g in sub_long.groupby('categoria'):
         v23 = float(g.loc[g.anio==2023, 'valor'].values[0])
         delta = v23 - v09
         msg_lines.append((cat, v23, delta))
-    except Exception:
+    except:
         continue
-
 msg_lines = sorted(msg_lines, key=lambda x: abs(x[2]), reverse=True)
-
 st.subheader("Hallazgos clave")
 if msg_lines:
     top_k = min(5, len(msg_lines))
@@ -177,42 +159,29 @@ if msg_lines:
     st.markdown("\n".join(bullets))
 else:
     st.info("No se pudieron calcular cambios (faltan datos 2009/2023 para este grupo)")
-
 # Gráfico simple
 st.subheader("Visualización sencilla")
 st.caption("Barras agrupadas por año con intervalos de confianza")
 st.altair_chart(alt_barras_ci(sub_long), use_container_width=True)
-
-# Datos crudos
 with st.expander("Ver datos crudos"):
     st.dataframe(sub_long.sort_values(["categoria","anio"]))
-
 # ============================
-# 4. MODO AVANZADO (TOGGLE)
+# 4. MODO AVANZADO
 # ============================
-
 af = st.checkbox("Mostrar modo avanzado", value=False)
 if af:
     st.markdown("---")
     st.subheader("Opciones avanzadas")
-    # Subconjuntos wide para el indicador-grupo
     sub_wide = wide[(wide["indicador"]==indicador_sel) & (wide["grupo"]==grupo_sel)].copy()
-
-    tipo = st.radio("Tipo de gráfico avanzado", ["Dumbbell","Slopegraph","Heatmap cambios % (para todos)"] , horizontal=True)
-
+    tipo = st.radio("Tipo de gráfico avanzado", ["Dumbbell","Slopegraph","Heatmap cambios % (para todos)"], horizontal=True)
     if tipo == "Dumbbell":
         st.altair_chart(alt_dumbbell(sub_wide), use_container_width=True)
     elif tipo == "Slopegraph":
         st.altair_chart(alt_slopegraph(sub_wide), use_container_width=True)
     else:
-        hm = alt_heatmap(wide[["indicador","categoria","rel_change"]])
-        st.altair_chart(hm, use_container_width=True)
-
-    # Tabla resumen para este indicador/grupo
+        st.altair_chart(alt_heatmap(wide[["indicador","categoria","rel_change"]]), use_container_width=True)
     st.markdown("**Resumen de cambios (2009→2023)**")
     cols_show = ["categoria","valor_2009","valor_2023","abs_change","rel_change","cambio_relevante"]
     st.dataframe(sub_wide[cols_show].sort_values("abs_change", ascending=False), use_container_width=True)
-
-    # Botón CSV
     csv2 = sub_wide.to_csv(index=False).encode("utf-8")
     st.download_button("Descargar CSV (indicador/grupo)", data=csv2, file_name="resumen_indicador_grupo.csv", mime="text/csv")
