@@ -1,5 +1,8 @@
 """
-Streamlit app (versión sencilla) para visualizar indicadores "M" (GATS 2009, 2015, 2023)
+Streamlit app sencilla para indicadores 'M' (GATS 2009, 2015, 2023)
+- Visualización por defecto: barras + IC95%
+- Opción: líneas facetadas por grupo con Altair
+- Modo avanzado opcional
 """
 
 # ============================
@@ -55,9 +58,10 @@ def alt_barras_ci(sub_long: pd.DataFrame) -> alt.Chart:
     """Barras horizontales (año en color) + IC95%."""
     data = sub_long.copy()
     data["anio"] = data["anio"].astype(str)
-    try:
-        order = data[data["anio"]=="2023"].sort_values("valor", ascending=False)["categoria"].tolist()
-    except:
+    if "2023" in data["anio"].unique():
+        order = (data[data["anio"]=="2023"]
+                 .sort_values("valor", ascending=False)["categoria"].tolist())
+    else:
         order = data["categoria"].unique().tolist()
 
     bars = alt.Chart(data).mark_bar().encode(
@@ -68,7 +72,7 @@ def alt_barras_ci(sub_long: pd.DataFrame) -> alt.Chart:
 
     errs = alt.Chart(data).mark_errorbar().encode(
         y=alt.Y('categoria:N', sort=order),
-        x=alt.X('inferior:Q'),
+        x='inferior:Q',
         x2='superior:Q',
         color=alt.Color('anio:N', legend=None)
     )
@@ -76,29 +80,41 @@ def alt_barras_ci(sub_long: pd.DataFrame) -> alt.Chart:
     height = max(220, 28 * data['categoria'].nunique())
     return (bars + errs).properties(width=650, height=height).resolve_scale(y='shared')
 
-# ---- NUEVO: Líneas facetadas ----
 def alt_line_facets(df_long: pd.DataFrame, indicador: str) -> alt.Chart:
-    """Líneas por categoría, facet por grupo, IC95% como rule."""
+    """
+    Líneas por categoría, facet por grupo. 
+    Se usa layer(linea + banda de error) y luego facet al final para evitar errores de esquema.
+    """
     data = df_long[df_long["indicador"] == indicador].copy()
     data["anio"] = data["anio"].astype(str)
 
-    base = alt.Chart(data).encode(
+    # Línea + puntos
+    line = alt.Chart(data).mark_line(point=True, strokeWidth=2).encode(
         x=alt.X("anio:O", title="Año"),
         y=alt.Y("valor:Q", title="%"),
         color=alt.Color("categoria:N", title="Categoría"),
         tooltip=["grupo","categoria","anio","valor","inferior","superior"]
     )
 
-    line = base.mark_line(point=True, strokeWidth=2)
-    err  = base.mark_rule().encode(y="inferior:Q", y2="superior:Q", color=alt.Color("categoria:N", legend=None))
+    # Banda de error (IC95%). Misma codificación de x/y para evitar conflictos
+    band = alt.Chart(data).mark_errorband(opacity=0.25).encode(
+        x="anio:O",
+        y="inferior:Q",
+        y2="superior:Q",
+        color=alt.Color("categoria:N", legend=None)
+    )
 
-    chart = (line + err).facet(
-        row=alt.Row("grupo:N", title=None, header=alt.Header(labelAngle=0))
+    layered = alt.layer(band, line)
+
+    # Facet al final (row por grupo)
+    chart = layered.facet(
+        row=alt.Row("grupo:N", title=None, header=alt.Header(labelAngle=0, labelPadding=5))
     ).properties(width=350, height=220, spacing=10)
 
-    return chart
+    # Escalas independientes en Y para cada facet (evita warnings de dominio)
+    return chart.resolve_scale(y="independent")
 
-# --- Avanzados (si quieres mantenerlos) ---
+# --- Avanzados opcionales ---
 def _prep_long(sub: pd.DataFrame, cols):
     long = sub.melt(id_vars=["categoria"], value_vars=cols,
                     var_name="anio", value_name="valor")
@@ -112,7 +128,7 @@ def alt_dumbbell(sub: pd.DataFrame) -> alt.Chart:
     long = _prep_long(sub, cols)
     base = alt.Chart(long).encode(y=alt.Y("categoria:N", sort='-x', title="Categoría"))
     line = base.mark_rule().encode(x=alt.X("min(valor):Q", title="%"), x2="max(valor):Q")
-    pts = base.mark_point(filled=True, size=60).encode(x="valor:Q", color=alt.Color("anio:N", legend=alt.Legend(title="Año")))
+    pts  = base.mark_point(filled=True, size=60).encode(x="valor:Q", color=alt.Color("anio:N", legend=alt.Legend(title="Año")))
     return (line + pts).properties(height=max(200, 25*len(sub)), width=650)
 
 def alt_slopegraph(sub: pd.DataFrame) -> alt.Chart:
@@ -163,7 +179,7 @@ for cat, g in sub_long.groupby('categoria'):
         v23 = float(g.loc[g.anio==2023, 'valor'].values[0])
         delta = v23 - v09
         msg_lines.append((cat, v23, delta))
-    except:
+    except Exception:
         continue
 msg_lines = sorted(msg_lines, key=lambda x: abs(x[2]), reverse=True)
 
@@ -211,3 +227,4 @@ if af:
     csv2 = sub_wide.to_csv(index=False).encode("utf-8")
     st.download_button("Descargar CSV (indicador/grupo)", data=csv2,
                        file_name="resumen_indicador_grupo.csv", mime="text/csv")
+
